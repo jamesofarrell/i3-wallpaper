@@ -1,0 +1,268 @@
+#!/usr/bin/env python3
+
+import i3ipc
+import sys
+import argparse
+import subprocess
+import copy
+import time
+from pprint import pprint
+
+#connect to i3
+i3 = i3ipc.Connection()
+
+#get the bar config
+#bar_config = i3.get_bar_config();
+#bar_height = bar_config.bar_height;
+#if bar_height is None:
+#    bar_height = 0
+
+#bar_position = bar_config.position;
+#if bar_position is None:
+#    bar_position = 'none'
+
+#Argument stuff
+parser = argparse.ArgumentParser(description='build a wallpaper for i3 based')
+parser.add_argument('--wait', help='wait for window changes', action='store_true', dest='wait', default=False)
+parser.add_argument('--bg-color', help='background colour', dest='color_bg', default='#FFFFFF')
+parser.add_argument('--bg-mask', help='background colour', dest='bg_mask', default='#110101')
+parser.add_argument('--bg-style', help='background style', dest='bg_style', default='solid',choices=['solid','time','mask-workspace','mask-output'])
+parser.add_argument('--bg-time-style', help='background time style', dest='time_style', default='hue',choices=['hex','hue','sun'])
+parser.add_argument('--fg-color', help='foreground colour', dest='color_fg', default='#000000')
+parser.add_argument('--bar-color', help='bar colour', dest='color_bar', default='#000000')
+parser.add_argument('--hl-color', help='hightlight colour', dest='color_hl', default='#222222')
+parser.add_argument('--bar-border', help='bar border', type=int, dest='bar_border', default=0)
+parser.add_argument('--gl-width', help='gap line width', type=int, dest='gap_lines', default=0)
+parser.add_argument('--gl-style', help='gap line style', dest='gap_lines', default='random',choices=['random','solid','test'])
+
+args = parser.parse_args()
+
+
+#build colors
+color = {'bg':args.color_bg, 'fg':args.color_fg, 'bar':args.color_bar, 'hl':args.color_hl}
+
+def get_bar_config(output_id):
+    return(i3.get_bar_config('bar-{0}'.format(output_id - 1)))
+
+def print_tree(tree, level=0):
+        for node in tree.nodes:
+            #print('  ' * level + repr(node.name) + ":" + node.type + ":" +  str(node.focused))
+            pprint(node,indent=level)
+            print_tree(node,level+1)
+
+def build_svg_from_body(width,height,body):
+    wallpaper = '<?xml version="1.0" encoding="UTF-8" standalone="no"?>\n'
+    wallpaper += '<svg xmlns="http://www.w3.org/2000/svg" width="{0}" height="{1}" version="1.1" baseProfile="full">\n'.format(width,height)
+    wallpaper += body
+
+    wallpaper += '\n</svg>'
+    return wallpaper
+
+def build_rect(x,y,w,h,color):
+    return('<rect x="{0}" y="{1}" width="{2}" height="{3}" fill="{4}"/>'.format(x,y,w,h,color))
+
+def build_svg_for_workspace(tree,color,bar):
+    x = tree.rect.x
+    y = tree.rect.y
+    w = tree.rect.width
+    h = tree.rect.height + bar.bar_height
+    svg_body = build_rect(0,0,w,h,color['bg'])
+    svg_body += build_bar_svg(w,h,color,bar)
+    return build_svg_from_body(w,h,svg_body)
+
+
+def build_bar_svg(w,h,color,bar):
+    #builds bar border
+    svg_body = ""
+    if (int(args.bar_border) > 0):
+        height = bar.bar_height + args.bar_border 
+        if(bar.position == "top"):
+            svg_body += build_rect(0,0,w,height,color['bar'])
+        if(bar.position == "bottom"):
+            svg_body += build_rect(0,h - height,w,height,color['bar'])
+    return svg_body
+
+
+def build_svg(rect,color,bar):
+    x = rect.x
+    y = rect.y
+    w = rect.width
+    h = rect.height
+    svg_body = build_rect(0,0,w,h,color['bg'])
+
+    #builds bar border
+    svg_body += build_bar_svg(w,h,color,bar)
+
+    return build_svg_from_body(w,h,svg_body)
+
+def set_bg(output_name,png):
+    #print(svg)
+    #p1 = subprocess.Popen(['/usr/bin/echo',svg],stdout=subprocess.PIPE)
+    #p2 = subprocess.Popen(['/usr/bin/rsvg-convert'],stdin=p1.stdout, stdout=subprocess.PIPE)
+    #p3 = subprocess.Popen(['/usr/bin/feh','-','--bg-scale','--bg-title',output.name],stdin=subprocess.PIPE)
+    p3 = subprocess.Popen(['/usr/bin/feh','-','--bg-scale'],stdin=subprocess.PIPE)
+    p3.communicate(input=png)
+    p3.stdin.close()
+    p3.wait()
+
+def build_png(svg):
+    p1 = subprocess.Popen(['/usr/bin/echo',svg],stdout=subprocess.PIPE)
+    p2 = subprocess.Popen(['/usr/bin/rsvg-convert'],stdin=p1.stdout, stdout=subprocess.PIPE)
+    #p1.stdin.close()
+    p2.wait()
+    return(p2.communicate()[0])
+
+
+def get_lines(workspace_tree, gaps_innter, gaps_outer):
+    lines = []
+    
+    return lines
+
+def build_default(output,output_id):
+    bc = get_bar_config(output_id)
+    bar_config[output.name] = bc
+
+    o_color = copy.copy(color)
+    o_color['bg'] = get_output_bg_color(output.name)
+
+    svg = build_svg(output.rect,o_color,bc)
+    svgs[output.name] = svg
+
+    png = build_png(svgs[output.name])
+    pngs[output.name] = png
+
+    set_bg(output,png)
+
+def build_workspace(num,tree):
+    print(tree.parent)
+    bar = bar_config[tree.parent.parent.name]
+    ws_color=copy.copy(color)
+    ws_color['bg'] = get_workspace_bg_color(num)
+    svg = build_svg_for_workspace(tree,ws_color,bar)
+    workspace_svgs[num] = svg
+    workspace_pngs[num] = build_png(svg)
+
+def get_workspace_tree(tree,workspace_num):
+    for output in tree.nodes[1].nodes:
+        for workspace in output.nodes:
+            if workspace.num == workspace_num:
+                return workspace
+    return None
+
+def update_workspace_tree(workspaces,tree):
+    for workspace in workspaces:
+        workspace_tree[workspace.num] = get_workspace_tree(tree,workspace.num)
+
+def get_bg_color(num):
+    if args.bg_style == "mask-output" or args.bg_style == "mask-workspace":
+        return mask_color(num,args.bg_mask)
+
+def get_bg_color_by_time():
+    if not args.bg_style == "time":
+        return args.color_bg
+    
+    h = (time.strftime("%H"))
+    m = (time.strftime("%M"))
+    s = (time.strftime("%M"))
+
+    if args.time_style  == "hue":
+        return "#000000"
+    elif args.time_style  == "hex":
+        new_h = hex(int(float(h) * (254/24) ))[2:]
+        new_m = hex(int(float(m) * (254/60) ))[2:]
+        new_s = hex(int(float(s) * (254/60) ))[2:]
+        return ("#" + new_h + new_m + new_s)
+    elif args.time_style  == "sun":
+        return "#000000"
+
+
+def get_workspace_bg_color(workspace_num):
+    if args.bg_style == "mask-workspace":
+        return get_bg_color(workspace_num)
+    if args.bg_style == "mask-output":
+        num = output_ids[workspace_tree[workspace_num].parent.parent.name]
+        return get_bg_color(num)
+    if args.bg_style == "time":
+        return get_bg_color_by_time()
+   
+    return args.color_bg
+
+def get_active_workspace(output_name):
+    for num,tree in workspace_tree.items():
+        if tree.parent.parent.name == output_name:
+            return num
+    return 0
+
+def get_output_bg_color(output_name):
+    if args.bg_style == "mask-workspace":
+        return get_bg_color(output_ids[output_name])
+    if args.bg_style == "mask-output":
+        num = get_active_workspace(output_name)
+        return get_bg_color(num)
+    if args.bg_style == "time":
+        return get_bg_color_by_time()
+
+    return args.color_bg
+
+def mask_color(num,mask):
+    new_color = "#" + hex(int(num) * int("0x" + mask[1:-4],base=16) % 255 )[2:]
+    new_color += hex(int(num) * int("0x" + mask[3:-2],base=16) % 255)[2:]
+    new_color += hex(int(num) * int("0x" + mask[5:],base=16) % 255)[2:]
+    print("mask: " + mask + " new: " + new_color)
+    return new_color
+
+def on_window(i3, event_args):
+    pprint(event_args)
+
+def on_workspace(i3, e):
+    num = e.current.num
+    #print("gaps {0}:{1}".format(e.current.gaps.inner, e.current.gaps.outer))
+    if (num in workspace_pngs):
+        set_bg(num,workspace_pngs[num])
+
+    update_workspace_tree(i3.get_workspaces(),i3.get_tree())
+    if not (num in workspace_pngs) or args.bg_style == "time":
+        build_workspace(num,workspace_tree[num])
+    if (num in workspace_pngs):
+        set_bg(num,workspace_pngs[num])
+
+tree = i3.get_tree()
+
+#get the output config
+outputs = i3.get_outputs()
+bar_config = {}
+output_id = 1
+
+svgs = {}
+pngs = {}
+output_ids = {}
+
+workspace_tree = {}
+workspace_svgs = {}
+workspace_pngs = {}
+
+#build workspace trees
+update_workspace_tree(i3.get_workspaces(),tree)
+
+#startup, build defaults
+for output in outputs:
+    if (output.active == True):
+        output_ids[output.name] = output_id
+        build_default(output,output_id)
+        output_id += 1
+
+if (not args.wait):
+    quit()
+
+
+for num,tree in workspace_tree.items():
+    build_workspace(num,tree)
+    if tree.focused:
+        set_bg(tree.output,workspace_pngs[num])
+
+i3.on("window",on_window)
+i3.on("workspace::focus",on_workspace)
+i3.on("workspace::empty",on_workspace)
+i3.main()
+
+
